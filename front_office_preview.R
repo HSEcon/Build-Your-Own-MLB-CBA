@@ -60,7 +60,8 @@ fo_pretty_label <- function(x) {
 }
 fo_display_digits <- function(x) {
   k<-tolower(gsub("[ _-]","",x))
-  if(grepl("^(season|year|rank|age|pa|ip|healthypa|healthyip|expectedpa|expectedip|starts|battinggames|pitchinggames)$",k) ||
+  if(grepl("^(ip|healthyip|expectedip|projectedip)$",k))return(2L)
+  if(grepl("^(season|year|rank|age|pa|healthypa|expectedpa|starts|battinggames|pitchinggames)$",k) ||
      grepl("attendance|defensiveouts|^statcastouts$|^drsouts$|controlyears|^b(ab|h|d|t|hr|r|rbi|w|k|hbp|sb|cs)$|^p(bfp|h|hr|r|er|w|k|hbp)$",k))return(0L)
   if(grepl("gini|coefficient|rsquared|rmse|^p$|^se$|^t$|^estimate$|weight$|rate$|success$|efficiency",k))return(3L)
   if(grepl("^(avg|obp|slg|ops|woba|babip|iso|xwoba|xslg|xavg)$|woba|babip",k))return(3L)
@@ -107,22 +108,32 @@ fo_name_link <- function(name,team=NULL) {
   if(length(unique(x$ID))==1) return(tags$a(href="#",class="fo-player-link",`data-fo-player`=x$ID[1],name))
   span(name,title="No unique player profile in the current dataset")
 }
-fo_seasons <- c("2027 scenario"="2027",setNames(as.character(2025:2015),paste(2025:2015,"historical")))
+fo_year_values <- sort(unique(fo_players$Season),decreasing=TRUE)
+fo_seasons <- setNames(as.character(fo_year_values),paste(fo_year_values,ifelse(fo_year_values>=2027,"scenario","historical")))
+fo_role_class <- function(d) {
+  pos<-ifelse(is.na(d$Position),"",toupper(d$Position));pa<-ifelse(is.finite(d$PA),d$PA,0);ip<-ifelse(is.finite(d$IP),d$IP,0)
+  ifelse(pos=="TWP","Two-way players",ifelse(pos=="P","Pitchers",ifelse(pos%in%c("C","1B","2B","3B","SS","LF","CF","RF","DH","OF","IF"),"Position players",ifelse(pa>=100&ip>=20,"Two-way players",ifelse(ip>0&pa<100,"Pitchers",ifelse(pa>0,"Position players","Unclassified"))))))
+}
+fo_sort_choices <- function(x) {
+  fields<-c("Value"="hWAR","Healthy hWAR"="Healthy_hWAR","Plate appearances"="PA","Innings pitched"="IP","OPS"="OPS","ERA"="ERA")
+  c("Value",names(fields)[names(fields)!="Value" & vapply(fields,function(k)k%in%names(x)&&any(is.finite(x[[k]])),logical(1))])
+}
 fo_leaders_ui <- function(teams) tagList(fo_css(),tags$script(HTML("document.addEventListener('click',function(e){var a=e.target.closest('a.fo-player-link');if(!a)return;e.preventDefault();e.stopPropagation();var id=a.getAttribute('data-fo-player');if(window.Shiny && id)Shiny.setInputValue('fo_open_player',String(id),{priority:'event'});},true);")),
   fo_title("MODEL 6 / PLAYER ANALYTICS","hWAR Leaders","Find the best players in baseball. Compare seasons, filter by team and see how much value comes from hitting and pitching."),
   fo_note("Open-data hWAR. Historical data end in 2025; 2027 is a two-year scenario using 2025 affiliations, not verified rosters. Individual fielding uses a recorded-error proxy only; no range or park adjustment. Missing forecasts are not zero player value."),
   uiOutput("fo_leader_metrics"),
   div(class="fo-shortcuts",span("Explore the numbers"),tags$a(href="#",onclick="Shiny.setInputValue('fo_jump','profiles',{priority:'event'});return false;","Find a player"),tags$a(href="#",onclick="Shiny.setInputValue('fo_jump','research',{priority:'event'});return false;","How hWAR works")),
-  fo_panel(div(class="fo-controls",selectInput("fo_year","Season",fo_seasons),selectInput("fo_team","Team",c("All teams"="ALL",teams)),selectInput("fo_role","Player type",c("All players","Position players","Pitchers","Two-way players"))),
+  fo_panel(div(class="fo-controls",selectInput("fo_year","Season",fo_seasons),selectInput("fo_team","Team",c("All teams"="ALL",teams)),selectInput("fo_role","Player type",c("All players","Position players","Pitchers","Two-way players","Unclassified"))),
     div(class="fo-controls",selectInput("fo_sort","Sort by",c("Value","Healthy hWAR","Plate appearances","Innings pitched","OPS","ERA")),textInput("fo_search","Search by player",""),downloadButton("fo_download","Download filtered CSV")),
     DTOutput("fo_leader_table"),p(class="fo-small","Click a player in the table to open their profile. Historical multi-team players appear under each team they played for; their full season totals are not split by club. 2027 OPS and ERA are hidden because they are not projections.")))
 fo_profile_ui <- function() tagList(
   fo_title("MODEL 6 / PLAYER ANALYTICS","Player Profiles","Explore player value, career statistics and the economics of player movement."),
   div(class="fo-profile-search",selectizeInput("fo_player","Find a player",choices=fo_choices(fo_players),selected=fo_default_player())),
+  div(class="fo-shortcuts",span("Quick navigation"),tags$a(href="#",onclick="Shiny.setInputValue('fo_jump','leaders',{priority:'event'});return false;","Back to player rankings"),tags$a(href="#",onclick="Shiny.setInputValue('fo_jump','research',{priority:'event'});return false;","How hWAR works")),
   fo_profile_context_ui(),uiOutput("fo_profile_metrics"),
   tabsetPanel(id="fo_profile_tab",type="pills",
-    tabPanel("Overview",fo_panel(h3("Career hWAR"),plotlyOutput("fo_career_plot",height="320px"),p(class="fo-small","2027 is a projection. Historical hWAR has incomplete defense coverage; healthy workload is a scenario, not an upper confidence bound.")),
-      fluidRow(column(6,fo_panel(h3("2027 projected value breakdown"),uiOutput("fo_projection_status"),conditionalPanel("output.fo_has_projection === true",plotlyOutput("fo_components",height="275px"),DTOutput("fo_component_table")),p(class="fo-small","The active forecast separately estimates defensive wins, other hitting value and pitching value. No unmodeled batting, baserunning or positional projections are invented."))),column(6,fo_panel(h3("Season-by-season numbers"),DTOutput("fo_history")))),
+    tabPanel("Overview",fo_standard_profile_ui(),fo_panel(h3("Career hWAR"),plotlyOutput("fo_career_plot",height="320px"),p(class="fo-small","2027 is a projection. Historical hWAR has incomplete defense coverage; healthy workload is a scenario, not an upper confidence bound.")),
+      fluidRow(column(6,fo_panel(h3("2027 projected value breakdown"),uiOutput("fo_projection_status"),conditionalPanel("output.fo_has_projection === true",plotlyOutput("fo_components",height="275px"),DTOutput("fo_component_table")),p(class="fo-small","The active forecast displays only measured or projected components available in the dataset; combined hitting value includes defense when separate projections are unavailable."))),column(6,fo_panel(h3("Season-by-season numbers"),DTOutput("fo_history")))),
     fo_panel(h3("Historical run components"),DTOutput("fo_historical_components"),p(class="fo-small","Historical run components are displayed in runs, not wins. Missing fielding or park coverage is not a measured zero."))),
     tabPanel("Statistics",fo_profile_detail_ui()),
     tabPanel("Projection research",fo_projection_research_ui()),
@@ -296,27 +307,31 @@ fo_server <- function(input,output,session,economic_forecast) {
       updateSelectizeInput(session,"fo_contract_player",choices=fo_choices(p27),selected=if("691718" %in% p27$ID) "691718" else p27$ID[1],server=TRUE)
     }
   })
+  observeEvent(input$fo_year,{
+    x<-d[d$Season==as.integer(input$fo_year),,drop=FALSE];choices<-fo_sort_choices(x)
+    selected<-isolate(input$fo_sort);if(is.null(selected)||!selected%in%choices)selected<-"Value"
+    updateSelectInput(session,"fo_sort",choices=choices,selected=selected)
+  })
   leaders <- reactive({
     require_players();req(input$fo_year,input$fo_team,input$fo_role,input$fo_sort)
     x <- d[d$Season==as.integer(input$fo_year),]
-    hist <- as.integer(input$fo_year)<2026
+    hist <- as.integer(input$fo_year)<2027
     x$Value <- x$hWAR
     x$League_Rank <- rank(-x$Value,ties.method="min",na.last="keep")
     if(input$fo_team!="ALL") x <- x[grepl(paste0("(^|;)",input$fo_team,"(;|$)"),ifelse(is.na(x$Teams),"",x$Teams)),]
-    if(input$fo_role=="Position players") x <- x[which(x$PA>0 & (x$IP==0 | (x$PA>=20 & x$IP<10))),,drop=FALSE]
-    if(input$fo_role=="Pitchers") x <- x[which(x$IP>0 & x$PA<20),,drop=FALSE]
-    if(input$fo_role=="Two-way players") x <- x[which(x$IP>=10 & x$PA>=20),,drop=FALSE]
+    if(input$fo_role!="All players") x <- x[which(fo_role_class(x)==input$fo_role),,drop=FALSE]
     if(nzchar(trimws(input$fo_search))) x <- x[grepl(tolower(input$fo_search),tolower(x$Player),fixed=TRUE),]
     if(as.integer(input$fo_year)==2027) {x$OPS<-NA_real_;x$ERA<-NA_real_}
     v <- switch(input$fo_sort,"Value"=x$Value,"Healthy hWAR"=x$Healthy_hWAR,"Plate appearances"=x$PA,"Innings pitched"=x$IP,"OPS"=x$OPS,"ERA"=-x$ERA)
-    x[order(v,decreasing=TRUE,na.last=TRUE),]
+    if(is.null(v)||!input$fo_sort%in%fo_sort_choices(x))v<-x$Value
+    x[order(v,decreasing=TRUE,na.last=TRUE),,drop=FALSE]
   })
   output$fo_leader_metrics <- renderUI({
     x<-leaders();z<-x[is.finite(x$Value),];lead<-if(nrow(z)) z[which.max(z$Value),] else NULL
     fo_kpis(fo_kpi("Players",nrow(x),"Filtered results"),fo_kpi("Valued players",nrow(z),"Non-missing estimates"),fo_kpi("hWAR leader",if(is.null(lead)) "—" else fo_num(lead$Value,2),if(is.null(lead)) "No calculated values" else lead$Player),fo_kpi("Season",input$fo_year,if(input$fo_year=="2027") "Preliminary projection" else "Historical results"))
   })
   output$fo_leader_table <- renderDT({
-    x<-leaders(); hist<-as.integer(input$fo_year)<2026
+    x<-leaders(); hist<-as.integer(input$fo_year)<2027
     z<-data.frame(Rank=x$League_Rank,Player=x$Player,Team=x$Teams,PA=x$PA,IP=x$IP,Value=x$Value,check.names=FALSE)
     names(z)[6]<-"hWAR"
     z[["Age"]]<-x$Age
@@ -331,7 +346,7 @@ fo_server <- function(input,output,session,economic_forecast) {
     DT::formatStyle(fo_format_table(t,z),"hWAR",backgroundColor=DT::styleInterval(c(0,2,5),c("#f9e9e5","#f5f7f8","#e9f3ee","#cfe5d8")),fontWeight="bold")
   },server=TRUE)
   output$fo_download <- downloadHandler(filename=function() paste0("player-leaders-",input$fo_year,".csv"),content=function(file) write.csv(leaders(),file,row.names=FALSE,na=""))
-  observeEvent(input$fo_jump,{if(identical(input$fo_jump,"profiles")){updateRadioButtons(session,"player_tab",selected="Player Profiles");updateTabsetPanel(session,"dashboard_tab",selected="Player Profiles")}else if(identical(input$fo_jump,"research")){updateRadioButtons(session,"nav_group",selected="Research & Background");updateRadioButtons(session,"research_tab",selected="How the Model Works");updateTabsetPanel(session,"dashboard_tab",selected="How the Model Works")}},ignoreInit=TRUE)
+  observeEvent(input$fo_jump,{if(identical(input$fo_jump,"leaders")){updateRadioButtons(session,"nav_group",selected="Player Analytics");updateRadioButtons(session,"player_tab",selected="hWAR Leaders");updateTabsetPanel(session,"dashboard_tab",selected="hWAR Leaders")}else if(identical(input$fo_jump,"profiles")){updateRadioButtons(session,"player_tab",selected="Player Profiles");updateTabsetPanel(session,"dashboard_tab",selected="Player Profiles")}else if(identical(input$fo_jump,"research")){updateRadioButtons(session,"nav_group",selected="Research & Background");updateRadioButtons(session,"research_tab",selected="How the Model Works");updateTabsetPanel(session,"dashboard_tab",selected="How the Model Works")}},ignoreInit=TRUE)
   observeEvent(input$fo_open_player,{
     id<-as.character(input$fo_open_player);req(id %in% d$ID)
     removeModal();updateRadioButtons(session,"nav_group",selected="Player Analytics")

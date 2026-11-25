@@ -2,13 +2,100 @@
 fo_profile_detail_ui <- function() fo_panel(h3("Player statistics"),
   div(class="fo-controls",selectInput("fo_detail_year","Season",choices=NULL),selectInput("fo_detail_group","Stats",c("hWAR breakdown","Standard batting","Advanced batting","Batted ball and discipline","Standard pitching","Advanced pitching","Pitch arsenal","Fielding and baserunning","All available statistics")),downloadButton("fo_profile_export","Download player data")),
   uiOutput("fo_detail_coverage"),DTOutput("fo_detail_table"),p(class="fo-small","Historical counting and rate statistics are calculated from Retrosheet; proprietary advanced metrics are not included. Blank means unavailable or not applicable. 2027 is a two-year scenario, not observed statistics."))
+# Observed standard statistics, never projected totals.
+fo_standard_profile_ui <- function() fo_panel(
+  h3("Traditional MLB statistics"),
+  uiOutput("fo_standard_coverage"),uiOutput("fo_standard_summary"),
+  uiOutput("fo_standard_bat_panel"),uiOutput("fo_standard_pitch_panel"),uiOutput("fo_standard_field_panel"),
+  p(class="fo-small","Regular-season observations only. Multi-team season totals are combined. Career-window totals include only seasons in this dataset, not necessarily the entire MLB career. Rates use combined counts. IP uses baseball notation (.1 = one out, .2 = two outs); other model tables may use decimal innings. A dash means unavailable or not applicable."))
+fo_ip_notation <- function(outs) ifelse(is.na(outs),NA_character_,paste0(outs%/%3,".",outs%%3))
+fo_standard_table <- function(z,role) {
+  stopifnot(!anyDuplicated(z[c("ID","Season")]))
+  get<-function(x,n) if(n %in% names(x)) as.numeric(x[[n]]) else rep(NA_real_,nrow(x))
+  sum_known<-function(x) if(all(is.finite(x))) sum(x) else NA_real_
+  rate<-function(n,d) ifelse(is.finite(n)&is.finite(d)&d>0,n/d,NA_real_)
+  fields<-switch(role,
+    batting=c(G="batting_games",PA="b_pa",AB="b_ab",R="b_r",H="b_h","2B"="b_d","3B"="b_t",HR="b_hr",RBI="b_rbi",BB="b_w",SO="b_k",SB="b_sb",CS="b_cs",HBP="b_hbp",SF="b_sf"),
+    pitching=c(G="pitching_games",GS="starts",W="p_wins",L="p_losses",SV="p_saves",Outs="p_ipouts",BF="p_bfp",H="p_h",R="p_r",ER="p_er",HR="p_hr",BB="p_w",SO="p_k",HBP="p_hbp"),
+    fielding=c(Chances="Recorded_Fielding_Chances",E="Recorded_Fielding_Errors"))
+  active<-switch(role,batting=get(z,"b_pa")>0,pitching=get(z,"p_ipouts")>0|get(z,"pitching_games")>0,fielding=get(z,"Recorded_Fielding_Chances")>0)
+  z<-z[which(active),,drop=FALSE];if(!nrow(z))return(NULL)
+  z<-z[order(z$Season),,drop=FALSE]
+  fields<-fields[unname(fields)%in%names(z)]
+  if(!length(fields))return(NULL)
+  d<-data.frame(Season=as.character(z$Season),Team=z$Teams,check.names=FALSE)
+  for(n in names(fields))d[[n]]<-get(z,fields[[n]])
+  total<-data.frame(Season="Dataset total",Team="",check.names=FALSE)
+  for(n in names(fields))total[[n]]<-sum_known(d[[n]])
+  d<-rbind(d,total)
+  val<-function(n) if(n%in%names(d))d[[n]] else rep(NA_real_,nrow(d))
+  if(role=="batting"){
+    d$AVG<-rate(val("H"),val("AB"))
+    d$OBP<-rate(val("H")+val("BB")+val("HBP"),val("AB")+val("BB")+val("HBP")+val("SF"))
+    d$SLG<-rate(val("H")+val("2B")+2*val("3B")+3*val("HR"),val("AB"))
+    d$OPS<-d$OBP+d$SLG
+  }
+  if(role=="pitching"){
+    d$ERA<-rate(27*val("ER"),val("Outs"))
+    d$WHIP<-rate(3*(val("BB")+val("H")),val("Outs"))
+    d[["K/9"]]<-rate(27*val("SO"),val("Outs"))
+    d[["BB/9"]]<-rate(27*val("BB"),val("Outs"))
+    d$IP<-fo_ip_notation(val("Outs"));d$Outs<-NULL
+    preferred<-c("Season","Team","G","GS","W","L","SV","IP","BF","H","R","ER","HR","BB","SO","HBP","ERA","WHIP","K/9","BB/9")
+    d<-d[,intersect(preferred,names(d)),drop=FALSE]
+  }
+  if(role=="fielding")d$FPCT<-rate(val("Chances")-val("E"),val("Chances"))
+  d
+}
+fo_standard_dt <- function(d) {
+  t<-DT::datatable(d,rownames=FALSE,selection="none",escape=TRUE,
+    class="compact stripe hover",options=list(dom="t",paging=FALSE,scrollX=TRUE,ordering=FALSE,
+      rowCallback=DT::JS("function(row,data){if(data[0]==='Dataset total'){$(row).css({'font-weight':'bold','background-color':'#eaf2ee','border-top':'2px solid #276b54'});}}")))
+  ints<-intersect(c("G","PA","AB","R","H","2B","3B","HR","RBI","BB","SO","SB","CS","HBP","SF","GS","W","L","SV","BF","ER","Chances","E"),names(d))
+  rates3<-intersect(c("AVG","OBP","SLG","OPS","FPCT"),names(d))
+  rates2<-intersect(c("ERA","WHIP","K/9","BB/9"),names(d))
+  if(length(ints))t<-DT::formatRound(t,ints,0)
+  if(length(rates3))t<-DT::formatRound(t,rates3,3)
+  if(length(rates2))t<-DT::formatRound(t,rates2,2)
+  t
+}
+fo_standard_profile_server <- function(input,output,session) {
+  hist<-reactive({req(input$fo_player);fo_players[fo_players$ID==input$fo_player & fo_players$Season<2027,,drop=FALSE]})
+  bat<-reactive(fo_standard_table(hist(),"batting"));pitch<-reactive(fo_standard_table(hist(),"pitching"));field<-reactive(fo_standard_table(hist(),"fielding"))
+  output$fo_standard_coverage<-renderUI({z<-hist();if(!nrow(z))return(fo_note("No observed regular-season statistics for this player."));fo_note(paste("Observed seasons:",min(z$Season),"–",max(z$Season),"·",nrow(z),"seasons in dataset"))})
+  output$fo_standard_summary<-renderUI({
+    z<-hist();if(!nrow(z))return(NULL)
+    b<-bat();p<-pitch();f<-function(d,n,k=0) if(is.null(d)||!n%in%names(d))"—" else {x<-tail(d[[n]],1);if(is.numeric(x)&&is.finite(x))fo_num(x,k) else if(is.na(x))"—" else as.character(x)}
+    items<-list()
+    if(!is.null(b))items<-c(items,list(fo_kpi("Hits",f(b,"H")),fo_kpi("Home runs",f(b,"HR")),fo_kpi("Batting average",f(b,"AVG",3)),fo_kpi("OPS",f(b,"OPS",3))))
+    if(!is.null(p))items<-c(items,list(fo_kpi("Innings pitched",f(p,"IP")),fo_kpi("Strikeouts",f(p,"SO")),fo_kpi("ERA",f(p,"ERA",2)),fo_kpi("WHIP",f(p,"WHIP",2))))
+    if(length(items))do.call(fo_kpis,items)
+  })
+  output$fo_standard_bat_panel<-renderUI({if(!is.null(bat()))tagList(h4("Batting"),DTOutput("fo_standard_bat"))})
+  output$fo_standard_pitch_panel<-renderUI({if(!is.null(pitch()))tagList(h4("Pitching"),DTOutput("fo_standard_pitch"))})
+  output$fo_standard_field_panel<-renderUI({if(!is.null(field()))tagList(h4("Fielding"),DTOutput("fo_standard_field"))})
+  output$fo_standard_bat<-renderDT({req(bat());fo_standard_dt(bat())},server=FALSE)
+  output$fo_standard_pitch<-renderDT({req(pitch());fo_standard_dt(pitch())},server=FALSE)
+  output$fo_standard_field<-renderDT({req(field());fo_standard_dt(field())},server=FALSE)
+}
+
+fo_derived_stats <- function(x) {
+  if(nrow(x)!=1||!is.finite(x$Season)||x$Season>=2027)return(x)
+  get<-function(k)if(k%in%names(x))suppressWarnings(as.numeric(x[[k]][1]))else NA_real_
+  ratio<-function(n,d)if(is.finite(n)&&is.finite(d)&&d>0)n/d else NA_real_
+  vals<-list(ISO=get("SLG")-get("AVG"),BB_rate=ratio(get("b_w"),get("b_pa")),K_rate=ratio(get("b_k"),get("b_pa")),SB_success=ratio(get("b_sb"),get("b_sb")+get("b_cs")),K_minus_BB_rate=ratio(get("p_k")-get("p_w"),get("p_bfp")))
+  for(k in names(vals))if(!k%in%names(x)||!is.finite(get(k)))x[[k]]<-vals[[k]]
+  x
+}
+
 fo_profile_detail_server <- function(input,output,session) {
+  fo_standard_profile_server(input,output,session)
   cache<-new.env(parent=emptyenv())
   raw<-function(){if(!exists("d",cache,inherits=FALSE)){path<-"data/hwar_preview/profile_stats.csv";cache$d<-if(file.exists(path)) read.csv(path,stringsAsFactors=FALSE,check.names=FALSE,na.strings=c("","NA")) else NULL};cache$d}
   player<-reactive({req(input$fo_player);x<-fo_players[fo_players$ID==input$fo_player,];validate(need(nrow(x)>0,"Player data unavailable."));x})
-  observeEvent(input$fo_player,{x<-player();years<-sort(unique(x$Season),decreasing=TRUE);updateSelectInput(session,"fo_detail_year",choices=years,selected=if(2025%in%years)2025 else years[1])})
+  observeEvent(input$fo_player,{x<-player();years<-sort(unique(x$Season),decreasing=TRUE);updateSelectInput(session,"fo_detail_year",choices=years,selected=if(any(years<2027))max(years[years<2027]) else years[1])})
   details<-reactive({x<-player();req(input$fo_detail_year);x<-x[x$Season==as.integer(input$fo_detail_year),];req(nrow(x)==1)
-    a<-raw();if(!is.null(a)&&all(c("ID","Season")%in%names(a))){b<-a[as.character(a$ID)==x$ID & a$Season==x$Season,,drop=FALSE];if(nrow(b)==1)x<-cbind(x,b[,setdiff(names(b),names(x)),drop=FALSE])};x})
+    a<-raw();if(!is.null(a)&&all(c("ID","Season")%in%names(a))){b<-a[as.character(a$ID)==x$ID & a$Season==x$Season,,drop=FALSE];if(nrow(b)==1)x<-cbind(x,b[,setdiff(names(b),names(x)),drop=FALSE])};fo_derived_stats(x)})
   output$fo_detail_coverage<-renderUI({x<-details();fo_note(x$Status,br(),"Defense: ",ifelse(is.na(x$Defense_Coverage),"Unavailable",x$Defense_Coverage)," | Park: ",ifelse(is.na(x$Park_Coverage),"Unavailable",x$Park_Coverage))})
   output$fo_detail_table<-renderDT({
     x<-details();req(input$fo_detail_group)
@@ -24,7 +111,7 @@ fo_profile_detail_server <- function(input,output,session) {
     label<-fo_pretty_label(fields)
     known<-c(b_ab="At bats",b_h="Hits",b_d="Doubles",b_t="Triples",b_hr="Home runs",b_r="Runs",b_rbi="RBI",b_w="Walks",b_k="Strikeouts",b_hbp="Hit by pitch",b_sb="Stolen bases",b_cs="Caught stealing",p_bfp="Batters faced",p_h="Hits allowed",p_hr="Home runs allowed",p_r="Runs allowed",p_er="Earned runs",p_w="Walks allowed",p_k="Strikeouts",p_hbp="Hit batters")
     label[fields%in%names(known)]<-unname(known[fields[fields%in%names(known)]])
-    z<-data.frame(Statistic=label,Value=unname(vals),check.names=FALSE);if(input$fo_detail_group!="hWAR breakdown"&&input$fo_detail_group!="Standard batting"&&input$fo_detail_group!="Standard pitching")z<-z[z$Value!="—",];validate(need(nrow(z)>0,"No measured statistics available in this category for the selected season."));fo_table(z,20)
+    z<-data.frame(Statistic=label,Value=unname(vals),check.names=FALSE);if(input$fo_detail_group!="hWAR breakdown"&&input$fo_detail_group!="Standard batting"&&input$fo_detail_group!="Standard pitching")z<-z[z$Value!="—",];validate(need(nrow(z)>0,"No measured statistics available for this player and season. Choose another category or historical season; unavailable metrics are not estimated."));fo_table(z,20)
   },server=FALSE)
   output$fo_profile_export<-downloadHandler(filename=function() paste0("player-",input$fo_player,"-",input$fo_detail_year,".csv"),content=function(file) write.csv(details(),file,row.names=FALSE,na=""))
 }

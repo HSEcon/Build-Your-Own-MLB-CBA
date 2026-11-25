@@ -38,6 +38,18 @@ try:
  click(text("#fo_leader_table a.fo-player-link","Aaron Judge"))
  text("#fo_profile_identity","Aaron Judge");text("#fo_history thead","Healthy hWAR");visible("#fo_history tbody td")
  text("#fo_component_table","Total projected hWAR")
+ text("#fo_standard_bat_panel","Batting");text("#fo_standard_bat","Dataset total");text("#fo_standard_bat thead","OPS")
+ visible("#fo_standard_summary .fo-kpi")
+ click(text(".fo-shortcuts a","Back to player rankings"))
+ visible("#fo_leader_table tbody td")
+ from selenium.webdriver.support.ui import Select
+ w.until(lambda d: "Healthy hWAR" in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options])
+ assert "OPS" not in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options]
+ Select(visible("#fo_year")).select_by_value("2025")
+ w.until(lambda d:"OPS" in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options])
+ assert "Healthy hWAR" not in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options]
+ click(text("#fo_leader_table a.fo-player-link","Aaron Judge"))
+ text("#fo_profile_identity","Aaron Judge")
  d.save_screenshot(str(out/"01-profile.png"))
  radio("nav_group","MLB Financial Data");radio("finance_tab","Transactions")
  click(text("#transaction_view a","Trades"))
@@ -45,7 +57,7 @@ try:
  visible("#shiny-modal #trade_detail");click(visible("#analyze_selected_tx"))
  visible("#fo_actual_chart .plotly");visible("#fo_actual_clubs tbody td")
  assert not d.find_elements(By.ID,"tx_wins_plot")
- visible("#fo_actual_asset_future_wins .plotly");text("#fo_actual_asset_clubs","Incomplete; no net valuation")
+ visible("#fo_actual_asset_future_wins .plotly");visible("#fo_actual_asset_cumulative_wins .plotly");visible("#fo_actual_asset_career_paths .plotly");text("#fo_actual_asset_clubs","Incomplete; no net valuation")
  d.save_screenshot(str(out/"02-trade.png"))
  print("PASS actual Retrosheet player profile and reported trade / future wins.")
 except Exception:

@@ -73,15 +73,30 @@ fo_financial_forecast <- function(f, coef=0.0273665) {
 
 # Multi-year trade value is separate from the single-season economic comparison.
 # These are transparent, editable scenario assumptions, not fitted aging curves.
+# Illustrative, not fitted: age affects both conditional production and probability of remaining MLB-active.
+# Age tiers are scenario defaults, NOT estimates of actual contractual control.
+fo_control_example <- function(age) if(age<=25) 6L else if(age<=29) 4L else if(age<=34) 3L else 1L
 fo_asset_path <- function(war,age,years,peak=27,growth=.25,decline=.35,upside=.25) {
   stopifnot(length(war)==1L,length(age)==1L,is.finite(war),is.finite(age),
     length(years)==1L,is.finite(years),years>=1,years<=10,years==floor(years),
     all(is.finite(c(peak,growth,decline,upside))),growth>=0,decline>=0,upside>=0)
   ages<-age+seq_len(years)-1
-  step<-ifelse(ages[-1]<=peak,growth,-decline)
-  extra<-ifelse(ages[-1]<=peak,upside,0)
-  data.frame(Year=2026+seq_len(years),Age=ages,Expected=war+c(0,cumsum(step)),
-    Upside=war+c(0,cumsum(step+extra)))
+  next_age<-ages[-1]
+  # Accelerating aging penalty, not a constant subtraction. Older players lose more.
+  step<-ifelse(next_age<=peak,growth*(1+.12*pmax(0,peak-next_age)),
+      -decline*(1+.15*pmax(0,next_age-peak)+.015*pmax(0,next_age-peak)^2))
+  # Additional upside accumulates before peak and persists into later seasons.
+  extra<-upside*exp(-.18*pmax(0,next_age-peak)^2)
+  # Conditional probability of remaining MLB-active; conditional on the first projected year.
+  # 4% annual minimum exit risk; rises steeply at advanced ages. These are editable-model
+  # assumptions in the sense that peak/decline are user inputs, not empirical probabilities.
+  hazard<-pmin(.90,.04+.0035*pmax(0,next_age-29)^2)
+  survival<-c(1,cumprod(1-hazard))
+  raw<-war+c(0,cumsum(step));hi<-war+c(0,cumsum(step+extra))
+  # Beyond the first year assume teams can replace below-replacement production.
+  expected<-c(war,pmax(0,raw[-1]))*survival
+  high<-c(war,pmax(0,hi[-1]))*survival
+  data.frame(Year=2026+seq_len(years),Age=ages,Expected=expected,Upside=high,Active_Probability=survival)
 }
 fo_asset_salary <- function(s,years) {
   if(is.null(s)||!nzchar(trimws(s)))return(rep(NA_real_,years))
@@ -98,15 +113,17 @@ fo_asset_surplus <- function(path,salary,market,discount) {
 fo_asset_ui <- function(prefix) {
   k<-function(x)paste0(prefix,x)
   fo_panel(h3("Long-term trade value"),p("A younger, inexpensive player with several years of team control can be more valuable than a veteran with greater immediate production. Compare future wins and discounted contract surplus separately from the 2027 impact above."),
-    fo_note("Control years default to a three-season scenario, not verified service-time facts. Edit them for each player. Salary schedules must be entered or verified; a blank or invalid schedule is not zero salary. Unprojected prospects remain unvalued."),
+    fo_note("Control defaults are illustrative age-tier scenarios (6 years through age 25, 4 through 29, 3 through 34, 1 thereafter), NOT actual service time or contract facts. Edit each player. Salary schedules must be entered or verified; missing salary or prospect value is not zero."),
     div(class="fo-controls",numericInput(k("market"),"Market value per hWAR ($M)",8,min=0,max=50,step=.5),
-      numericInput(k("discount"),"Discount rate (%)",5,min=0,max=30,step=.5),numericInput(k("peak"),"Assumed peak age",27,min=20,max=35,step=1)),
+      numericInput(k("discount"),"Discount rate (%)",5,min=0,max=30,step=.5),numericInput(k("peak"),"Assumed peak age",27,min=20,max=35,step=1),numericInput(k("horizon"),"Display horizon (seasons)",10,min=1,max=10,step=1)),
     div(class="fo-controls",numericInput(k("growth"),"Annual pre-peak growth (hWAR)",.25,min=0,max=2,step=.05),
-      numericInput(k("decline"),"Annual post-peak decline (hWAR)",.35,min=0,max=2,step=.05),
-      numericInput(k("upside"),"Additional pre-peak upside (hWAR)",.25,min=0,max=2,step=.05)),
+      numericInput(k("decline"),"Base post-peak decline (hWAR)",.35,min=0,max=2,step=.05),
+      numericInput(k("upside"),"Additional development upside (hWAR)",.25,min=0,max=2,step=.05)),
     uiOutput(k("inputs")),uiOutput(k("coverage")),
-    h4("Future wins by club"),plotlyOutput(k("future_wins"),height="365px"),
-    p(class="fo-small","Annual incremental wins versus retaining the traded players, with 2027 club strengths and the synthetic schedule held fixed. This is a controlled-player scenario, not an absolute standings forecast. Solid lines use the base age curve; dashed lines add hypothetical upside. After a player's assumed control ends, their incremental contribution ends. Unknown prospects are excluded, not valued at zero."),
+    h4("Annual future wins by club"),plotlyOutput(k("future_wins"),height="400px"),
+    h4("Cumulative future wins by club"),plotlyOutput(k("cumulative_wins"),height="365px"),
+    h4("Player career scenarios (irrespective of control)"),plotlyOutput(k("career_paths"),height="365px"),
+    p(class="fo-small","Annual and cumulative incremental wins versus retaining traded players, holding 2027 club strengths fixed. Solid = base scenario; dashed = development upside. Club impact ends at assumed control expiry; individual career scenarios continue independently. Aging accelerates after peak and MLB-exit risk increases with age. After the initial year, below-replacement talent can be replaced. These are illustrative assumptions, not fitted probabilities or standings forecasts. Unknown prospects are excluded."),
     h4("Player contract surplus"),DTOutput(k("players")),h4("Net trade surplus by club"),DTOutput(k("clubs")),
     p(class="fo-small","Discounted surplus = expected hWAR × assumed market dollars per win minus the receiving club's annual salary, discounted to the present. Enter one salary in millions for each controlled year, separated by commas. The aging and market assumptions are not statistically fitted; the upside curve is not a probability bound. Net surplus is withheld if any player or salary schedule is missing."))
 }
@@ -122,7 +139,7 @@ fo_asset_server <- function(input,output,session,prefix,moves,economic_forecast,
     if(!nrow(x))return(p("Select a trade with at least one player with a usable MLB projection."))
     tagList(lapply(seq_len(nrow(x)),function(i) {
       z<-x[i,];div(class="fo-panel",h4(paste0(z$Player," · ",z$From," → ",z$To)),
-        div(class="fo-controls",numericInput(k(paste0("years_",z$Key)),"Assumed remaining control (years)",3,min=1,max=10,step=1),
+        div(class="fo-controls",numericInput(k(paste0("years_",z$Key)),"Assumed remaining control (years)",fo_control_example(z$Age),min=1,max=10,step=1),
           textInput(k(paste0("salary_",z$Key)),"Receiving club salary by year ($M)","",placeholder="e.g. 1, 4, 7"),
           p(paste("Age",round(z$Age),"· Starting hWAR",fo_num(z$WAR,1)))))
     }))
@@ -132,7 +149,8 @@ fo_asset_server <- function(input,output,session,prefix,moves,economic_forecast,
     known<-which(x$Known);validate(need(length(known)>0,"No players have sufficient MLB projection data."))
     pars<-lapply(c("market","discount","peak","growth","decline","upside"),function(n)input[[k(n)]]);req(all(lengths(pars)==1L));v<-as.numeric(unlist(pars))
     validate(need(all(is.finite(v))&&all(v>=0),"Use nonnegative, finite scenario assumptions."))
-    ages<-list();summ<-list()
+    ages<-list();career<-list();summ<-list()
+    horizon<-input[[k("horizon")]];req(length(horizon)==1L);validate(need(is.finite(horizon)&&horizon>=1&&horizon<=10&&horizon==floor(horizon),"Choose 1–10 display seasons."))
     for(i in known) {
       z<-x[i,];n<-input[[k(paste0("years_",z$Key))]];req(!is.null(n))
       validate(need(is.finite(n)&&n>=1&&n<=10&&n==floor(n),"Control must be a whole number from 1 to 10 years."))
@@ -140,6 +158,7 @@ fo_asset_server <- function(input,output,session,prefix,moves,economic_forecast,
       salary<-fo_asset_salary(input[[k(paste0("salary_",z$Key))]],n)
       pv<-fo_asset_surplus(y,salary,v[1],v[2]/100)
       ages[[length(ages)+1L]]<-cbind(data.frame(From=z$From,To=z$To),y)
+      career[[length(career)+1L]]<-cbind(data.frame(Player=z$Player,Control_Years=n),fo_asset_path(z$WAR,z$Age,horizon,v[3],v[4],v[5],v[6]))
       summ[[length(summ)+1L]]<-data.frame(Player=z$Player,From=z$From,To=z$To,Age=z$Age,
         "Control years"=n,"Expected total hWAR"=sum(y$Expected),"Upside total hWAR"=sum(y$Upside),
         "PV salary ($M)"=unname(pv["Salary"]),"Expected surplus ($M)"=unname(pv["Expected"]),"Upside surplus ($M)"=unname(pv["Upside"]),
@@ -150,7 +169,7 @@ fo_asset_server <- function(input,output,session,prefix,moves,economic_forecast,
         "Control years"=NA_real_,"Expected total hWAR"=NA_real_,"Upside total hWAR"=NA_real_,"PV salary ($M)"=NA_real_,
         "Expected surplus ($M)"=NA_real_,"Upside surplus ($M)"=NA_real_,Coverage="No usable projection / age / club",check.names=FALSE)
     }
-    list(paths=do.call(rbind,ages),summary=do.call(rbind,summ),n=nrow(x),covered=length(known))
+    list(paths=do.call(rbind,ages),career=do.call(rbind,career),horizon=horizon,summary=do.call(rbind,summ),n=nrow(x),covered=length(known))
   })
   output[[k("coverage")]]<-renderUI({
     q<-calc();fo_note(paste(q$covered,"of",q$n,"players have usable age and MLB forecasts. Salary scenarios do not alter the saved payroll or the 2027 transaction graph."))
@@ -168,7 +187,7 @@ fo_asset_server <- function(input,output,session,prefix,moves,economic_forecast,
   future<-reactive({
     q<-calc();p<-q$paths;f<-economic_forecast();r<-ratings()
     clubs<-sort(unique(c(p$From,p$To)));out<-list()
-    for(y in sort(unique(p$Year)))for(mode in c("Expected","Upside")) {
+    for(y in 2026+seq_len(q$horizon))for(mode in c("Expected","Upside")) {
       a<-p[p$Year==y,,drop=FALSE];delta<-setNames(rep(0,length(clubs)),clubs)
       for(i in seq_len(nrow(a))) {
         delta[a$From[i]]<-delta[a$From[i]]-a[[mode]][i]
@@ -180,14 +199,25 @@ fo_asset_server <- function(input,output,session,prefix,moves,economic_forecast,
     }
     do.call(rbind,out)
   })
-  output[[k("future_wins")]]<-renderPlotly({
+  win_plot<-function(cumulative=FALSE) {
     z<-future();clubs<-sort(unique(z$Team));colors<-setNames(rep(c("#286d5a","#376f93","#b6794b","#a85c59"),length.out=length(clubs)),clubs)
     p<-plot_ly()
     for(t in clubs)for(mode in c("Expected","Upside")){
-      a<-z[z$Team==t&z$Scenario==mode,]
-      p<-add_trace(p,x=a$Year,y=a$Win_Change,type="scatter",mode="lines+markers",name=paste(t,mode),line=list(color=colors[[t]],dash=if(mode=="Expected")"solid"else"dash"),marker=list(color=colors[[t]]),hovertemplate=paste0(t," · ",mode,"<br>%{x}: %{y:+.2f} wins<extra></extra>"))
+      a<-z[z$Team==t&z$Scenario==mode,];a<-a[order(a$Year),]
+      values<-if(cumulative)cumsum(a$Win_Change)else a$Win_Change
+      p<-add_trace(p,x=a$Year,y=values,type="scatter",mode="lines+markers",name=paste(t,mode),line=list(color=colors[[t]],dash=if(mode=="Expected")"solid"else"dash",width=if(mode=="Expected")3 else 2),marker=list(color=colors[[t]],size=5),hovertemplate=paste0(t," · ",mode,"<br>%{x}: %{y:+.2f} wins<extra></extra>"))
     }
-    layout(p,xaxis=list(title="Season",dtick=1),yaxis=list(title="Incremental expected wins",zeroline=TRUE),legend=list(orientation="h"),margin=list(t=10,b=65))
+    layout(p,xaxis=list(title="Season",dtick=1,tickformat="d"),yaxis=list(title=if(cumulative)"Cumulative incremental wins"else"Annual incremental wins",zeroline=TRUE),legend=list(orientation="h"),margin=list(t=10,b=65))
+  }
+  output[[k("future_wins")]]<-renderPlotly(win_plot())
+  output[[k("cumulative_wins")]]<-renderPlotly(win_plot(TRUE))
+  output[[k("career_paths")]]<-renderPlotly({
+    z<-calc()$career;p<-plot_ly()
+    for(t in unique(z$Player)){
+      a<-z[z$Player==t,];a<-a[order(a$Year),]
+      p<-add_trace(p,x=a$Year,y=a$Expected,type="scatter",mode="lines+markers",name=t,customdata=a$Active_Probability,hovertemplate=paste0(t,"<br>%{x}: %{y:.2f} hWAR<br>Scenario active probability: %{customdata:.0%}<extra></extra>"))
+    }
+    layout(p,xaxis=list(title="Season",dtick=1,tickformat="d"),yaxis=list(title="Illustrative expected player hWAR",zeroline=TRUE),legend=list(orientation="h"),margin=list(t=10,b=65))
   })
 }
 
@@ -207,10 +237,10 @@ fo_move_ui <- function(teams,signing=FALSE) {
       if(signing) radioButtons(key("baseline"),"Compare against",c("Former club retains player"="retains","Player already available (no former-club deduction)"="available")),
       numericInput(key("pay_b"),"Former / other club net payroll change ($M)",0,min=-500,max=500,step=1)))),
     radioButtons(key("workload"),"Player valuation",c("Expected hWAR"="hWAR","Healthy workload scenario (not a probability bound)"="Healthy_hWAR"),inline=TRUE),
-    uiOutput(key("metrics")),
+    { immediate<-tagList(uiOutput(key("metrics")),
     fluidRow(column(6,fo_panel(h3("Players and net production"),DTOutput(key("players")))),column(6,fo_panel(h3("Economic effects on both clubs"),DTOutput(key("econ"))))),
-    fo_panel(h3("League-wide win and loss changes"),plotlyOutput(key("chart"),height="340px"),DTOutput(key("table")),p(class="fo-small","Division opponents play each other 13 times in the synthetic schedule. Other intraleague opponents meet 6–7 times; interleague opponents 3–4 times. Changes may offset if opponents play both trade partners. League wins always equal league losses (2,430 each).")),
-    if(!signing) fo_asset_ui("fo_trade_asset_"))
+    fo_panel(h3("League-wide win and loss changes"),plotlyOutput(key("chart"),height="340px"),DTOutput(key("table")),p(class="fo-small","Division opponents play each other 13 times in the synthetic schedule. Other intraleague opponents meet 6–7 times; interleague opponents 3–4 times. Changes may offset if opponents play both trade partners. League wins always equal league losses (2,430 each).")))
+      if(signing) immediate else tabsetPanel(id="fo_trade_view",tabPanel("Immediate Impact",immediate),tabPanel("Future Value",fo_asset_ui("fo_trade_asset_"))) })
 }
 fo_move_server <- function(input,output,session,economic_forecast,signing=FALSE) {
   id<-if(signing) "sign" else "trade";key<-function(x) paste0("fo_",id,"_",x)

@@ -621,6 +621,7 @@ app_table <- function(data,...,selection="none") {
 }
 
 ui <- fluidPage(
+  team_profile_links_ui(base),
   
   tags$head(
     tags$style(
@@ -1063,7 +1064,7 @@ ui <- fluidPage(
     conditionalPanel("input.nav_group == 'CBA Simulator'",radioButtons("sim_tab",NULL,c("Results","Compare","Negotiation","Best Compromise","All 30 Clubs"),inline=TRUE)),
     conditionalPanel("input.nav_group == 'MLB Financial Data'",radioButtons("finance_tab",NULL,c("Live Payroll","Transactions"="Signings & Trades","Transaction Economics","Offseason Economics","2027 Economic Forecasts"),inline=TRUE)),
     conditionalPanel("input.nav_group == 'Player Analytics'",radioButtons("player_tab",NULL,c("hWAR Leaders","Player Profiles"),inline=TRUE)),
-    conditionalPanel("input.nav_group == 'Front Office'",radioButtons("fo_tab",NULL,c("Trade Simulator","Signing Simulator","Projected Standings","Contract Valuation Lab","Free-Agent Lab"),inline=TRUE)),
+    conditionalPanel("input.nav_group == 'Front Office'",radioButtons("fo_tab",NULL,c("Team Profiles","Trade Simulator","Signing Simulator","Projected Standings","Contract Valuation Lab","Free-Agent Lab"),inline=TRUE)),
     conditionalPanel("input.nav_group == 'Research & Background'",radioButtons("research_tab",NULL,c("CBA Explained"="Learn","Latest Negotiations"="CBA News","How the Model Works","Model Assumptions","Sources"),inline=TRUE))),
   
   fluidRow(
@@ -1929,6 +1930,7 @@ sliderInput("revenue_growth","Estimated underlying revenue growth (Model 5)",0,0
         tabPanel("Trade Simulator",fo_move_ui(setNames(base$Team_ID,base$Team_Name))),
         tabPanel("Signing Simulator",fo_move_ui(setNames(base$Team_ID,base$Team_Name),signing=TRUE)),
         tabPanel("Projected Standings",fo_schedule_ui()),
+        tabPanel("Team Profiles",team_profile_ui(setNames(base$Team_ID,base$Team_Name))),
         tabPanel("Contract Valuation Lab",fo_contract_ui()),
         tabPanel("Free-Agent Lab",fo_fa_ui()),
         tabPanel("Transaction Economics",fo_note("Compare a player-based estimate with the existing payroll-based transaction analysis below. They are alternative win estimates, not additive.",actionButton("fo_go_report","View player-based signing impact")),transaction_impact_ui(setNames(base$Team_ID,base$Team_Name))),
@@ -2475,6 +2477,7 @@ server <- function(
     )
   })
   
+  team_profile_server(input,output,session,base,economic_forecast,payroll_snapshot,simulation,free_agency_rows,trades)
   scores <- reactive({
     
     negotiation_scores(

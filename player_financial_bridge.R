@@ -268,3 +268,90 @@ fo_profile_context_server <- function(input,output,session,signings,trades,open_
   },server=FALSE)
   observeEvent(input$fo_open_transaction,{key<-as.character(input$fo_open_transaction);req(length(key)==1,grepl("^(trade|signing|contract):",key));open_transaction(key)},ignoreInit=TRUE)
 }
+
+
+# Shared team navigation: DOM-safe links preserve existing table row interactions and formatting.
+team_profile_link <- function(id,label=id) tags$a(href="#",class="fo-team-link",`data-fo-team`=id,label)
+team_profile_links_ui <- function(base) {
+  mapping<-setNames(as.character(base$Team_ID),as.character(base$Team_Name))
+  mapping<-c(mapping,setNames(as.character(base$Team_ID),as.character(base$Team_ID)))
+  js<-paste0("var teamMap=",jsonlite::toJSON(as.list(mapping),auto_unbox=TRUE),";",'
+(function(){
+  function link(id,label){var a=document.createElement("a");a.href="#";a.className="fo-team-link";a.dataset.foTeam=id;a.textContent=label;return a;}
+  function convert(el){
+    if(el.closest("a,button,select,input,textarea")||el.querySelector("a,button,input,select"))return;
+    var t=el.textContent.trim(), id=teamMap[t];
+    if(id){el.textContent="";el.appendChild(link(id,t));return;}
+    // Multi-club labels, including historical affiliations and the two sides of a trade.
+    var m=t.match(/^([A-Z]{2,3})(: .+)$/);
+    if(m&&teamMap[m[1]]){el.textContent="";el.appendChild(link(teamMap[m[1]],m[1]));el.appendChild(document.createTextNode(m[2]));return;}
+    if(/^[A-Z]{2,3}(\\s*[;↔→/]\\s*[A-Z]{2,3})+$/.test(t)){
+      var parts=t.split(/(\\s*[;↔→/]\\s*)/);
+      if(parts.filter(function(_,i){return i%2===0;}).every(function(p){return !!teamMap[p];})){
+        el.textContent="";parts.forEach(function(p,i){el.appendChild(i%2===0?link(teamMap[p],p):document.createTextNode(p));});
+      }
+    }
+  }
+  var pending=false;
+  function scan(){pending=false;document.querySelectorAll("table tbody td, .fo-profile-facts strong, .fo-profile-identity strong, .trade-sides h4").forEach(convert);}
+  function queue(){if(!pending){pending=true;requestAnimationFrame(scan);}}
+  document.addEventListener("click",function(e){
+    var a=e.target.closest("a.fo-team-link");if(!a)return;
+    e.preventDefault();e.stopPropagation();if(window.Shiny)Shiny.setInputValue("fo_open_team",a.dataset.foTeam,{priority:"event"});
+  },true);
+  function start(){new MutationObserver(queue).observe(document.body,{childList:true,subtree:true});queue();}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
+})();')
+  tagList(tags$style(HTML(".fo-team-link{color:#28658a;text-decoration:underline;text-underline-offset:2px;cursor:pointer;font-weight:600}.team-division-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.team-division-grid .fo-panel{margin:0}.team-division-grid th,.team-division-grid td{white-space:nowrap}.team-division-grid .fo-panel{overflow-x:auto}@media(max-width:1100px){.team-division-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.team-division-grid{grid-template-columns:1fr}}")),tags$script(HTML(js)))
+}
+team_profile_ui <- function(teams) tagList(
+  fo_title("CLUB RESEARCH","Team Profiles","Explore roster history, projections, finances and reported transactions for all 30 MLB clubs."),
+  fo_panel(div(class="fo-controls",selectInput("team_profile_id","Club",teams,selected="BAL"),actionButton("team_profile_back","Back to previous page"))),
+  uiOutput("team_profile_identity"),uiOutput("team_profile_metrics"),
+  tabsetPanel(id="team_profile_tabs",
+    tabPanel("Overview",fo_panel(h3("Record and forecast"),plotlyOutput("team_profile_wins",height="300px")),fo_panel(h3("Selected CBA scenario"),DTOutput("team_profile_cba"))),
+    tabPanel("Roster & projections",fo_panel(uiOutput("team_profile_roster_note"),DTOutput("team_profile_roster"),p(class="fo-small","Click any player to open their profile. Multi-club full-season totals are not used as club totals. Current affiliations are unavailable unless independently verified."))),
+    tabPanel("Finances",fo_panel(h3("Payroll and CBT snapshot"),DTOutput("team_profile_finances")),fo_panel(h3("Attendance and revenue"),plotlyOutput("team_profile_attendance",height="300px"),plotlyOutput("team_profile_revenue",height="300px"))),
+    tabPanel("Transactions",fo_panel(h3("Reported signings and trades"),DTOutput("team_profile_transactions"),p(class="fo-small","Reviewed tracker only; not a complete transaction census.")))))
+team_profile_server <- function(input,output,session,base,forecast,payroll,simulation,signings,trades) {
+  origin<-reactiveVal(NULL)
+  tab_for<-function(group)switch(group,"CBA Simulator"="sim_tab","MLB Financial Data"="finance_tab","Player Analytics"="player_tab","Front Office"="fo_tab","Research & Background"="research_tab")
+  observeEvent(input$fo_open_team,{
+    id<-as.character(input$fo_open_team);req(length(id)==1,id%in%base$Team_ID)
+    group<-isolate(input$nav_group);key<-tab_for(group);if(!is.null(key)&&!identical(isolate(input[[key]]),"Team Profiles"))origin(list(group=group,key=key,tab=isolate(input[[key]])))
+    removeModal();updateSelectInput(session,"team_profile_id",selected=id)
+    updateRadioButtons(session,"nav_group",selected="Front Office");updateRadioButtons(session,"fo_tab",selected="Team Profiles");updateTabsetPanel(session,"dashboard_tab",selected="Team Profiles")
+    session$onFlushed(function(){updateRadioButtons(session,"nav_group",selected="Front Office");updateRadioButtons(session,"fo_tab",selected="Team Profiles");updateTabsetPanel(session,"dashboard_tab",selected="Team Profiles");updateSelectInput(session,"team_profile_id",selected=id)},once=TRUE)
+  },ignoreInit=TRUE)
+  observeEvent(input$team_profile_back,{o<-origin();if(is.null(o))o<-list(group="Front Office",key="fo_tab",tab="Projected Standings");updateRadioButtons(session,"nav_group",selected=o$group);updateRadioButtons(session,o$key,selected=o$tab);updateTabsetPanel(session,"dashboard_tab",selected=o$tab)})
+  id<-reactive({req(input$team_profile_id);input$team_profile_id})
+  club<-reactive({x<-forecast();x<-x[x$Team_ID==id(),,drop=FALSE];req(nrow(x)==1);x})
+  pay<-reactive({x<-payroll();x<-x[x$Team_ID==id(),,drop=FALSE];req(nrow(x)==1);x})
+  sc<-reactive({x<-simulation()$team;x<-x[x$Team_ID==id(),,drop=FALSE];req(nrow(x)==1);x})
+  fmt<-function(x,d=1)if(length(x)==1&&is.finite(x))fo_num(x,d)else "—"
+  money<-function(x)if(length(x)==1&&is.finite(x))fo_money(x)else "—"
+  output$team_profile_identity<-renderUI({x<-club();fo_panel(h2(x$Team_Name),p(unname(fo_div[id()])),fo_note(paste("Financial snapshot:",x$Snapshot_Date,"| 2026 figures and 2027 model estimates; player coverage is separate.")))})
+  output$team_profile_metrics<-renderUI({x<-club();p<-pay();fo_kpis(fo_kpi("2027 projected wins",fmt(x$Expected_Wins_2027),"Model 5 schedule-adjusted"),fo_kpi("Modeled payroll",money(p$Latest_Payroll_Millions),"Partial payroll snapshot"),fo_kpi("2027 projected revenue",money(x$Revenue_2027),"Model estimate"),fo_kpi("2027 projected attendance",fmt(x$Attendance_2027,0),"Model estimate"))})
+  output$team_profile_wins<-renderPlotly({x<-club();z<-sc();plot_ly(x=c("2026 win rate × 162","2027 baseline forecast","Selected CBA scenario"),y=c(162*x$Win_Pct_2026,x$Expected_Wins_2027,z$Predicted_Wins),type="bar",marker=list(color=c("#647d90","#376f93","#286d5a"))) %>% layout(yaxis=list(title="Wins (162-game scale)",range=c(0,162)),xaxis=list(title=""),margin=list(b=80))})
+  output$team_profile_cba<-renderDT({z<-sc();fields<-c("Original_Payroll_M","New_Payroll_M","Payroll_Change_M","Predicted_Wins","Change_Wins","Revenue_Change_M","CBT_Exposure_M","Low_Spending_Tax_M","Direct_Club_Effect_M");fields<-intersect(fields,names(z));fo_table(data.frame(Measure=fo_pretty_label(fields),Value=vapply(fields,function(k)fmt(z[[k]],2),character(1))),15)},server=FALSE)
+  roster<-reactive({
+    d<-fo_players;years<-d$Season[d$Season<2027];validate(need(length(years)>0,"No historical player data."))
+    y<-max(years);h<-d[d$Season==y & !is.na(d$Teams),,drop=FALSE];h<-h[grepl(paste0("(^|;)",id(),"(;|$)"),h$Teams),,drop=FALSE]
+    p<-d[d$Season==2027,,drop=FALSE];i<-match(h$ID,p$ID)
+    z<-data.frame(ID=h$ID,Player=h$Player,Position=h$Position,Historical_Teams=h$Teams,Historical_Season=y,PA=h$PA,IP=h$IP,OPS=h$OPS,ERA=h$ERA,hWAR=h$hWAR,Projected_Age=p$Age[i],Projected_PA=p$PA[i],Projected_IP=p$IP[i],Projected_hWAR=p$hWAR[i],Healthy_hWAR=p$Healthy_hWAR[i],check.names=FALSE)
+    z[order(-z$Projected_hWAR,na.last=TRUE),,drop=FALSE]
+  })
+  output$team_profile_roster_note<-renderUI({z<-roster();fo_note(paste("Last available historical club appearances:",max(fo_players$Season[fo_players$Season<2027]),"| Not a verified current roster.",nrow(z),"players; projections are individual scenarios, not an official roster forecast."))})
+  output$team_profile_roster<-renderDT({z<-roster();z$Player<-vapply(seq_len(nrow(z)),function(i)as.character(tags$a(href="#",class="fo-player-link",`data-fo-player`=z$ID[i],z$Player[i])),character(1));z$ID<-NULL;fo_format_table(DT::datatable(z,rownames=FALSE,escape=-1,options=list(pageLength=20,scrollX=TRUE,order=list())),z)},server=FALSE)
+  output$team_profile_finances<-renderDT({p<-pay();x<-club();fo_table(data.frame(Measure=c("2026 opening payroll baseline","Latest modeled payroll","Latest CBT proxy","2027 projected payroll","2026 estimated revenue","2027 projected revenue","2026 attendance","2027 projected attendance"),Value=c(money(p$Base_Payroll_Millions),money(p$Latest_Payroll_Millions),money(p$Latest_CBT_Millions),money(x$Projected_2027_Payroll_Millions),money(x$Revenue_2026),money(x$Revenue_2027),fmt(x$Attendance_2026,0),fmt(x$Attendance_2027,0))),10)},server=FALSE)
+  output$team_profile_attendance<-renderPlotly({x<-club();plot_ly(x=c("2026","2027 projected"),y=c(x$Attendance_2026,x$Attendance_2027),type="bar",marker=list(color="#376f93")) %>% layout(yaxis=list(title="Attendance"),xaxis=list(title=""))})
+  output$team_profile_revenue<-renderPlotly({x<-club();plot_ly(x=c("2026 estimated","2027 projected"),y=c(x$Revenue_2026,x$Revenue_2027),type="bar",marker=list(color="#286d5a")) %>% layout(yaxis=list(title="Revenue ($M)"),xaxis=list(title=""))})
+  output$team_profile_transactions<-renderDT({
+    a<-signings();b<-trades();k<-id()
+    a<-a[which(a$Previous_Team_ID==k|a$New_Team_ID==k),,drop=FALSE];b<-b[which(b$From_Team_ID==k|b$To_Team_ID==k),,drop=FALSE]
+    z<-rbind(data.frame(Date=as.character(a$Reported_Date),Type=rep("Signing",nrow(a)),Player=a$Player,From=a$Previous_Team_ID,To=a$New_Team_ID,Status=a$Status,Source=a$Source_URL),data.frame(Date=as.character(b$Transaction_Date),Type=rep("Trade",nrow(b)),Player=b$Player,From=b$From_Team_ID,To=b$To_Team_ID,Status=b$Status,Source=b$Source_URL))
+    if(!nrow(z))return(fo_table(data.frame(Status="No reviewed transactions"),10))
+    z<-z[order(z$Date,decreasing=TRUE),];z$Source<-vapply(z$Source,function(u)if(!is.na(u)&&grepl("^https://[^[:space:]]+$",u))as.character(tags$a("Report",href=u,target="_blank",rel="noopener noreferrer"))else "—",character(1))
+    DT::datatable(z,rownames=FALSE,escape=-ncol(z),options=list(pageLength=15,scrollX=TRUE,order=list()))
+  },server=FALSE)
+}

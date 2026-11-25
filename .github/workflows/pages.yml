@@ -1,39 +1,78 @@
-name: Deploy Shinylive site to GitHub Pages
-
+name: Deploy validated eight-model Shinylive site
 on:
   push:
     branches: ["main"]
   workflow_dispatch:
-
 permissions:
   contents: read
   pages: write
   id-token: write
-
 concurrency:
-  group: "pages"
+  group: pages
   cancel-in-progress: true
-
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+  validate:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build reusable Retrosheet data (2015–2025)
+        run: python3 research-tools/build_open_hwar.py
+      - name: Verify source version and assemble public-only bundle
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          a=json.loads(Path('data/hwar_preview/open_data_audit.json').read_text())
+          expected=[
+            'ebbd62ae0228d4fe5c0ee70ccd528d294f9f1cb53cb4c722bc0b20320910b2fc',
+            'f9df69fc2008620cbc33e05150c7a8ca5baadde653ff3e2c4d4e03bbcb60efeb',
+            '3bc1189cbb0e1edbe58ec7f4ab3c80ea4dcead704961ecabe870b3f3cc05dfca',
+            '383b8e4f0e13b1cd27a7102d3ac92576614fbd6a695e7e451d958b7cf18f1270',
+            '8a708ee38ad5ef1b9eb895373cb1af9857de49e3f36fe6cbc37ff381a85cc8be',
+            '1d556520ed30218c8dd9cbabdb4d93816f825be469bc3f0a401e778b456936b3',
+            'dfed1f55e287cb0bebf8d279727e400b3b408daa8c59e5d0731017e2c80bab43',
+            '73a3a5cb1a12905d842e9aa1f2be112a34db8a011b54d7249273b624d9448486',
+            '7faea3925007ea469fb8a72393b3b1b901a4156e248ec07854d7aa2eb389d1ed',
+            'f438fb7574ba068ae66976d4c2597fd8a5f5838f4b56702515f8afb941630b28',
+            '3d1e0e81d5913a635ae7a80366b811b777b832b488274124b4e38e04dd892753']
+          assert [s['sha256'] for s in a['source_seasons']]==expected, 'Retrosheet archive revision requires review'
+          assert a['biography_sha256']=='b389f4616dff02c45676519db6c46b7319e9dbc5be139e5ff31ca5b885f064c1'
+          assert a['history_rows']==15521 and a['forecast_rows']==1470
+          PY
+          python3 release/prepare_open_bundle.py . /tmp/open-candidate
+          cp /tmp/open-candidate/app.json site/app.json
+          cp /tmp/open-candidate/manifest.json site/release-manifest.json
+          python3 -m pip install selenium
+      - name: Verify real-data browser interactions before deployment
+        run: |
+          python3 -m http.server 3838 --bind 127.0.0.1 --directory site >/tmp/open-http.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; tail -60 /tmp/open-http.log' EXIT
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3838/ >/dev/null && break; sleep 1; done
+          python3 release/check_open_browser.py
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-
-      - name: Upload Shinylive site
+      - name: Upload validated site only
         uses: actions/upload-pages-artifact@v4
         with:
           path: ./site
-
-      - name: Deploy to GitHub Pages
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-browser-evidence
+          path: open-release-evidence/
+          retention-days: 3
+  deploy:
+    needs: validate
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy validated site
         id: deployment
         uses: actions/deploy-pages@v4

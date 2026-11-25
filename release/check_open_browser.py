@@ -43,13 +43,15 @@ try:
  click(text(".fo-shortcuts a","Back to player rankings"))
  visible("#fo_leader_table tbody td")
  from selenium.webdriver.support.ui import Select
- w.until(lambda d: "Healthy hWAR" in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options])
- assert "OPS" not in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options]
+ Select(visible("#fo_year")).select_by_value("2027")
+ w.until(lambda d: "Healthy hWAR" in [e.get_attribute("value") for e in Select(d.find_element(By.ID,"fo_sort")).options])
+ assert "OPS" not in [e.get_attribute("value") for e in Select(d.find_element(By.ID,"fo_sort")).options]
  Select(visible("#fo_year")).select_by_value("2025")
- w.until(lambda d:"OPS" in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options])
- assert "Healthy hWAR" not in [e.text for e in Select(d.find_element(By.ID,"fo_sort")).options]
+ w.until(lambda d:"OPS" in [e.get_attribute("value") for e in Select(d.find_element(By.ID,"fo_sort")).options])
+ assert "Healthy hWAR" not in [e.get_attribute("value") for e in Select(d.find_element(By.ID,"fo_sort")).options]
  click(text("#fo_leader_table a.fo-player-link","Aaron Judge"))
  text("#fo_profile_identity","Aaron Judge")
+ print("PASS standard profile, rankings navigation and season-specific sorting",flush=True)
  d.save_screenshot(str(out/"01-profile.png"))
  radio("nav_group","MLB Financial Data");radio("finance_tab","Transactions")
  click(text("#transaction_view a","Trades"))

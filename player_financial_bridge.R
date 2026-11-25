@@ -280,7 +280,7 @@ team_profile_links_ui <- function(base) {
   function link(id,label){var a=document.createElement("a");a.href="#";a.className="fo-team-link";a.dataset.foTeam=id;a.textContent=label;return a;}
   function convert(el){
     if(el.closest("a,button,select,input,textarea")||el.querySelector("a,button,input,select"))return;
-    var t=el.textContent.trim(), id=teamMap[t];
+    var t=el.textContent.trim(), id=Object.prototype.hasOwnProperty.call(teamMap,t)?teamMap[t]:null;
     if(id){el.textContent="";el.appendChild(link(id,t));return;}
     // Multi-club labels, including historical affiliations and the two sides of a trade.
     var m=t.match(/^([A-Z]{2,3})(: .+)$/);
@@ -299,7 +299,7 @@ team_profile_links_ui <- function(base) {
     var a=e.target.closest("a.fo-team-link");if(!a)return;
     e.preventDefault();e.stopPropagation();if(window.Shiny)Shiny.setInputValue("fo_open_team",a.dataset.foTeam,{priority:"event"});
   },true);
-  function start(){new MutationObserver(queue).observe(document.body,{childList:true,subtree:true});queue();}
+  function start(){new MutationObserver(function(records){if(records.some(function(r){return Array.from(r.addedNodes).some(function(n){return n.nodeType===1&&!n.classList.contains("fo-team-link")&&(n.matches("td,tr,tbody,table,.fo-profile-facts,.fo-profile-identity,.trade-sides")||n.querySelector("table,.fo-profile-facts,.fo-profile-identity,.trade-sides"));});}))queue();}).observe(document.body,{childList:true,subtree:true});queue();}
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
 })();')
   tagList(tags$style(HTML(".fo-team-link{color:#28658a;text-decoration:underline;text-underline-offset:2px;cursor:pointer;font-weight:600}.team-division-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.team-division-grid .fo-panel{margin:0}.team-division-grid th,.team-division-grid td{white-space:nowrap}.team-division-grid .fo-panel{overflow-x:auto}@media(max-width:1100px){.team-division-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.team-division-grid{grid-template-columns:1fr}}")),tags$script(HTML(js)))
